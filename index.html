@@ -119,4 +119,38 @@ fullChartData=function(branch,kind){
 };
 fillProductOptions();
 syncSaleName();
+// Sutera and Eco use different package catalogues.
+const branchPackageChoices={
+  Sutera:{Credit:['688+68','988+138','1388+228','2988+488'],次数:['238','348','468 指甲配套','468 Keratin配套','528','588','768','948']},
+  Eco:{Credit:['688+68','988+138','1388+228','2988+488'],次数:['238','408','468','528 指甲配套','648','528 Keratin配套','768','948','1128']}
+};
+fillPackageOptions=function(selected=''){
+  const category=$('#packageCategory').value,branch=$('#branch').value,options=(branchPackageChoices[branch]||branchPackageChoices.Sutera)[category]||[];
+  $('#packageOption').innerHTML=options.map(x=>`<option value="${x}">${category==='Credit'?x:'RM'+x}</option>`).join('')+'<option value="other">其他配套（手动填写）</option>';
+  if(options.includes(selected)||selected==='other')$('#packageOption').value=selected;
+  syncPackageName();
+};
+$('#branch').onchange=()=>{fillStaff();fillPackageOptions()};
+const branchPackageEditBase=editSale;
+editSale=function(id){
+  branchPackageEditBase(id);
+  const r=records.find(x=>String(x.id)===String(id));
+  if(!r||r.sale_type!=='package')return;
+  const name=(r.product_name||'').trim(),category=name.startsWith('次数 ')?'次数':'Credit',choice=name.replace(/^(Credit|次数)\s+/,'');
+  $('#packageCategory').value=category;
+  const choices=(branchPackageChoices[r.branch]||branchPackageChoices.Sutera)[category]||[];
+  fillPackageOptions(choices.includes(choice)?choice:'other');
+  if($('#packageOption').value==='other'){$('#product').value=name;productField.hidden=false;$('#product').disabled=false}
+};
+const branchPackageChartBase=fullChartData;
+fullChartData=function(branch,kind){
+  const data=branchPackageChartBase(branch,kind);
+  if(kind==='package'){
+    const choices=branchPackageChoices[branch]||branchPackageChoices.Sutera,strict={};
+    [...choices.Credit.map(x=>'Credit '+x),...choices.次数.map(x=>'次数 '+x)].forEach(name=>strict[name]=data.items[name]||0);
+    data.items=strict;
+  }
+  return data;
+};
+fillPackageOptions();
 </script></body></html>
