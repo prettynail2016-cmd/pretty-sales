@@ -61,4 +61,44 @@ if(content!=='details')html+=`<div class="report-section"><h3>员工销售汇总
 if(content!=='summary')html+=`<div class="report-section"><h3>销售明细</h3><table class="report-table"><thead><tr><th>日期</th><th>分店</th><th>类别</th><th>员工</th><th>内容</th><th>数量</th><th>金额</th></tr></thead><tbody>${rows.length?rows.map(r=>{const share=allocated(r,person);return `<tr><td>${esc(r.record_date)}</td><td>${esc(r.branch)}</td><td>${r.sale_type==='package'?'配套':'产品'}</td><td>${r.company_sale?'Counter':esc((r.staff_codes||[]).join(' + '))}</td><td>${esc(r.product_name||'-')}</td><td>x${share.qty}</td><td>${money(share.amount)}</td></tr>`}).join(''):'<tr><td colspan="7">没有符合条件的资料</td></tr>'}</tbody></table></div>`;
 html+=`<div style="text-align:right;color:#777;font-size:10px;margin-top:18px">生成时间：${new Date().toLocaleString('zh-MY')}</div>`;$('#pdfReport').innerHTML=html;$('#pdfReport').classList.remove('report-hide');$('#reportError').textContent='';return rows}
 $('#reportBranch').onchange=fillReportStaff;$('#previewPdf').onclick=()=>{try{buildReport();$('#pdfReport').scrollIntoView({behavior:'smooth'})}catch(e){$('#reportError').textContent=e.message}};$('#downloadPdf').onclick=async()=>{try{const rows=buildReport();const person=$('#reportStaff').value==='all'?'all':$('#reportStaff').value.replace('|','-'),filename=`Pretty-Sales-${$('#reportFrom').value||'start'}-${$('#reportTo').value||'end'}-${person}.pdf`;$('#downloadPdf').disabled=true;$('#downloadPdf').textContent='正在生成…';await html2pdf().set({margin:8,filename,image:{type:'jpeg',quality:.97},html2canvas:{scale:2,useCORS:true},jsPDF:{unit:'mm',format:'a4',orientation:'portrait'},pagebreak:{mode:['css','legacy'],avoid:['tr']}}).from($('#pdfReport')).save()}catch(e){$('#reportError').textContent='PDF生成失败：'+e.message}finally{$('#downloadPdf').disabled=false;$('#downloadPdf').textContent='下载 PDF'}};
+// Product editing must restore every product control before the user updates the record.
+const editSaleProductFix=editSale;
+editSale=function(id){
+  editSaleProductFix(id);
+  const r=records.find(x=>String(x.id)===String(id));
+  if(!r||r.sale_type!=='product')return;
+  syncSaleName();
+  const name=(r.product_name||'').trim();
+  if(name.startsWith('BOGO:')){
+    const [first,second]=name.slice(5).split('|');
+    $('#bogo').checked=true;
+    syncBogo();
+    $('#productSelect').value=first;
+    syncProductChoice();
+    $('#productSelect2').value=second;
+    $('#product').value=name;
+  }else{
+    $('#bogo').checked=false;
+    syncBogo();
+    const known=allProductNames().includes(name);
+    fillProductOptions(known?name:'other');
+    if(known){$('#productSelect').value=name;syncProductChoice()}
+    else{$('#productSelect').value='other';syncProductChoice();$('#product').value=name}
+  }
+};
+
+// Keep charts in the owner's fixed catalogue/roster order; never sort by quantity.
+const chartProductOrder=['睫毛增长液','Keratin serum','睫毛膏','睫毛梳','lotion(小)','scrub(小)','lotion(大)','scrub(大)','卧蚕笔','cuticle oil 68','cuticle oil 11 - mini','Fungus','Repair Cream','Strengthener','Cuticle Oil - Roll On','Cuticle Oil 10','Cuticle Oil 38','MASK','Body Oil','Foot Cream','Buffer／Buff棒','Hair Tonic','LOREAL','MONFRI','WC Body Scrub','WC Lotion CC Cream','WC Body Lotion Spray','WC Body Shampoo','WC White CC UV 11'];
+const fullChartDataFixedBase=fullChartData;
+fullChartData=function(branch,kind){
+  const data=fullChartDataFixedBase(branch,kind);
+  if(kind==='product'){
+    const ordered={};
+    chartProductOrder.forEach(name=>ordered[name]=data.items[name]||0);
+    Object.keys(data.items).forEach(name=>{if(!(name in ordered))ordered[name]=data.items[name]});
+    data.items=ordered;
+  }
+  return data;
+};
+makeVerticalChart=function(title,data){const entries=Object.entries(data),canvas=document.createElement('canvas'),width=Math.max(850,entries.length*86+110),height=500,dpr=2;canvas.width=width*dpr;canvas.height=height*dpr;canvas.style.width=width+'px';canvas.style.height=height+'px';canvas.dataset.chartTitle=title;const c=canvas.getContext('2d');c.scale(dpr,dpr);c.fillStyle='#fff';c.fillRect(0,0,width,height);c.fillStyle='#222';c.font='600 21px Segoe UI,Arial,sans-serif';c.textAlign='center';c.fillText(title,width/2,34);if(!entries.length){c.fillStyle='#777';c.font='15px Segoe UI,Arial,sans-serif';c.fillText('还没有销售资料',width/2,height/2);return canvas}const left=58,right=24,top=68,bottom=78,plotW=width-left-right,plotH=height-top-bottom,maxValue=Math.max(...entries.map(x=>x[1]),1),step=maxValue<=5?1:maxValue<=20?5:Math.ceil(maxValue/5/5)*5,yMax=Math.ceil(maxValue/step)*step;c.font='12px Segoe UI,Arial,sans-serif';c.strokeStyle='#d9d9d9';c.lineWidth=1;c.textAlign='right';for(let v=0;v<=yMax;v+=step){const y=top+plotH-(v/yMax)*plotH;c.beginPath();c.moveTo(left,y);c.lineTo(width-right,y);c.stroke();c.fillStyle='#555';c.fillText(neat(v),left-9,y+4)}const slot=plotW/entries.length,barW=Math.min(48,slot*.62);entries.forEach(([name,value],i)=>{const x=left+i*slot+(slot-barW)/2,barH=value/yMax*plotH,y=top+plotH-barH;c.fillStyle='#4285f4';c.fillRect(x,y,barW,barH);c.fillStyle='#4285f4';c.textAlign='center';c.font='12px Segoe UI,Arial,sans-serif';c.fillText(neat(value),x+barW/2,Math.max(top+12,y-7));c.save();c.translate(x+barW/2,top+plotH+18);c.rotate(-Math.PI/7);c.fillStyle='#333';c.font='11px Segoe UI,Arial,sans-serif';c.textAlign='right';c.fillText(name,0,0);c.restore()});return canvas};
 </script></body></html>
