@@ -690,4 +690,59 @@ $('#saveTarget').onclick=saveTargetManager;
 // Refresh visible target information and ranking after all overrides are installed.
 renderTargetManager();render();
 </script>
+<script>
+// October 2026: separate branch/half-month records without colliding with the
+// existing database unique key (sale_type, period_type, stage, active_from).
+// The date's DAY is a deterministic namespace; target_month remains month start.
+(function(){
+ const periodSelect=$('#targetPeriod');
+ if(!periodSelect.querySelector('option[value="both"]'))periodSelect.insertAdjacentHTML('afterbegin','<option value="both">上下半个月通用（同时保存两期）</option>');
+ periodSelect.value='both';
+ const slotDate=(month,branch,period)=>month+'-'+String(({Sutera:{first:5,second:6,month:9},Eco:{first:7,second:8,month:10}}[branch]||{})[period]||12).padStart(2,'0');
+ const currentRender=renderTargetManager;
+ renderTargetManager=function(){
+   if(periodSelect.value!=='both')return currentRender();
+   periodSelect.value='first';
+   try{currentRender()}finally{periodSelect.value='both'}
+   const status=$('#targetStatus');
+   if(status&&!status.textContent.includes('保存失败'))status.textContent='上下半个月通用：当前显示上半月数值；保存时会同时更新上下半月。之后仍可单独调整任一期。';
+ };
+ const existingEdit=editTarget;
+ editTarget=function(id){existingEdit(id);const row=targets.find(t=>String(t.id)===String(id));if(row&&targetCompetitionPeriod(row)==='both')periodSelect.value='both'};
+ const earlierSave=saveTargetManager;
+ saveTargetManager=async function(){
+   const month=$('#targetMonth').value,id=$('#targetCompetition').value,branch=$('#targetBranch').value,selected=periodSelect.value;
+   if(!newPrizeApplies(month,id))return earlierSave();
+   if(!await requireCompetitionAdmin())return managerNotice('#targetStatus','只有 Admin 可以保存 Target 和奖金。',true);
+   if(!['Sutera','Eco'].includes(branch))return managerNotice('#targetStatus','请分别选择 Sutera 或 Eco。',true);
+   const periods=selected==='both'?['first','second']:[selected];
+   const stage=selected==='month'?null:Number($('#targetStage').value);
+   const amount=selected==='month'?(Number($('#targetAmount').value)||1):Number($('#targetAmount').value);
+   const minimum=Number($('#targetPersonalMin').value);
+   if(!month||!Number.isFinite(amount)||amount<=0||!Number.isFinite(minimum)||minimum<0)return managerNotice('#targetStatus','请填写有效 Target 和个人最低销售额。',true);
+   const prizes=[1,2,3].map(n=>Math.max(0,Number($('#targetPrize'+n).value)||0));
+   if(selected==='month'&&id==='package')prizes.push(Math.max(0,Number($('#targetPrize4').value)||0));
+   while(prizes.length<4)prizes.push(0);
+   prizes.push(minimum===0?-0.000001:-minimum);
+   const done=[];
+   for(const period of periods){
+     const active=slotDate(month,branch,period);
+     const payload={competition_id:id,sale_type:id,target_month:monthStartValue(month),period_type:period==='month'?'month':'half',competition_period:period,branch,stage,target_amount:amount,prizes,active_from:active};
+     const old=targets.find(t=>targetCompetitionId(t)===id&&String(t.target_month||t.active_from||'').slice(0,7)===month&&targetBranch(t)===branch&&targetCompetitionPeriod(t)===period&&(period==='month'||Number(t.stage)===stage));
+     let result=old?await db.from('targets').update(payload).eq('id',old.id):await db.from('targets').insert({...payload,lucky_draw_ranks:[],qualification:'none'});
+     // If a stale copy or concurrent save already inserted this slot, update its exact unique-key record.
+     if(result.error&&String(result.error.message).includes('duplicate key')){
+       result=await db.from('targets').update(payload).eq('sale_type',id).eq('period_type',payload.period_type).eq('stage',stage).eq('active_from',active);
+     }
+     if(result.error){managerNotice('#targetStatus',`保存失败（${period==='first'?'上半月':period==='second'?'下半月':'月度'}）：${result.error.message}。已保存：${done.join('、')||'无'}`,true);await loadBase();return}
+     done.push(period==='first'?'上半月':period==='second'?'下半月':'月度');
+   }
+   await loadBase();renderTargetManager();
+   managerNotice('#targetStatus',`${month} ${branch}：${done.join('、')} Target、奖金及个人最低销售额已保存。`);
+ };
+ $('#saveTarget').onclick=saveTargetManager;
+ periodSelect.addEventListener('change',()=>{if(periodSelect.value==='both')renderTargetManager()});
+ renderTargetManager();
+})();
+</script>
 </body></html>
