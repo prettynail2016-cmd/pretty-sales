@@ -587,4 +587,107 @@ $('#targetCompetition').addEventListener('change',renderTargetManager);
 $('#targetPeriod').addEventListener('change',renderTargetManager);
 renderTargetManager();render();
 </script>
+<script>
+// October 2026 configurable rules. The final prizes-array slot is a negative
+// minimum-sales marker, avoiding a production database migration.
+// Normal prize entries remain unchanged; a marker is never displayed as a prize.
+const minRuleMarkerIndex=4;
+function configuredMinimum(row,defaultValue){
+  const marker=Number(row?.prizes?.[minRuleMarkerIndex]);
+  return Number.isFinite(marker)&&marker<0?-marker:defaultValue;
+}
+function prizeValues(row,fallback){
+  const count=fallback.length;
+  if(!row||row._defaultTarget)return fallback.slice();
+  const saved=Array.isArray(row.prizes)?row.prizes.slice(0,count).map(v=>Math.max(0,Number(v)||0)):[];
+  return saved.some(v=>v>0)?fallback.map((v,i)=>saved[i]??v):fallback.slice();
+}
+const octoberResolvedRows=monthTargetRows;
+monthTargetRows=function(month,id,period,branch=$('#rankBranch')?.value||'all'){
+  const rows=octoberResolvedRows(month,id,period,branch);
+  if(month<'2026-10'||!newPrizeRules[id]||!octoberTargetDefaults[branch]?.[id])return rows;
+  const isMonth=period==='month',defaults=octoberTargetDefaults[branch][id],rule=newPrizeRules[id];
+  const stages=isMonth?[0]:[1,2,3];
+  return stages.map(stage=>{
+    const candidates=targets.filter(t=>targetCompetitionId(t)===id&&targetMatchesCompetitionPeriod(t,period)&&
+      targetBranch(t)===branch&&String(t.target_month||t.active_from||'').slice(0,7)>='2026-10'&&
+      String(t.target_month||t.active_from||'').slice(0,7)<=month&&
+      (isMonth||+t.stage===stage));
+    candidates.sort((a,b)=>String(b.target_month||b.active_from||'').localeCompare(String(a.target_month||a.active_from||'')));
+    if(candidates.length)return candidates[0];
+    // October rules take priority over September legacy targets, without changing history.
+    return {competition_id:id,sale_type:id,branch,period_type:isMonth?'month':'half',competition_period:period,
+      stage:isMonth?null:stage,target_amount:isMonth?1:defaults[stage-1],
+      prizes:isMonth?rule.month.slice():rule.half[stage-1].slice(),target_month:'2026-10-01',_defaultTarget:true};
+  });
+};
+newPrizeStatus=function(month,id,branch,period){
+ const rule=newPrizeRules[id];if(!rule)return null;
+ if(period==='month'){
+   const halves=['first','second'].map(p=>{const first=monthTargetRows(month,id,p,branch).find(t=>+t.stage===1);return !!first&&branchHalfScore(month,id,branch,p)>=+first.target_amount});
+   const row=monthTargetRows(month,id,'month',branch)[0];
+   return {unlocked:halves.every(Boolean),halves,prizes:prizeValues(row,rule.month),minimum:configuredMinimum(row,rule.monthMin)};
+ }
+ const rows=monthTargetRows(month,id,period,branch),score=branchHalfScore(month,id,branch,period),reached=achievedBonusTarget(score,rows);
+ const level=reached?Math.max(1,Math.min(3,+reached.stage||rows.indexOf(reached)+1)):0;
+ const selected=reached||rows[0];
+ return {unlocked:level>0,level,prizes:level?prizeValues(reached,rule.half[level-1]):[],minimum:configuredMinimum(selected,rule.halfMin)};
+};
+const minField=document.createElement('div');
+minField.innerHTML='<label>个人领取奖金最低销售额（RM）</label><input id="targetPersonalMin" type="number" min="0" step="0.01" placeholder="例如 1000"><small style="display:block;opacity:.75;margin-top:5px">按员工分配后的销售额判断；未达标不递补名次。保存后其他设备同步，之后月份自动沿用。</small>';
+$('#targetAmount').closest('div').after(minField);
+const originalTargetEditor=editTarget;
+editTarget=function(id){originalTargetEditor(id);const row=targets.find(t=>String(t.id)===String(id));if(!row)return;$('#targetAmount').value=row.period_type==='month'?'':row.target_amount;const fallback=newPrizeRules[targetCompetitionId(row)]?.[targetCompetitionPeriod(row)==='month'?'monthMin':'halfMin']||0;$('#targetPersonalMin').value=configuredMinimum(row,fallback);[1,2,3].forEach((n,i)=>$('#targetPrize'+n).value=row.prizes?.[i]??0);if($('#targetPrize4'))$('#targetPrize4').value=row.prizes?.[3]??0;};
+function populateOctoberTargetInputs(){
+ const month=$('#targetMonth').value,id=$('#targetCompetition').value,branch=$('#targetBranch').value,period=$('#targetPeriod').value,stage=+$('#targetStage').value;
+ if(!newPrizeApplies(month,id)||!newPrizeRules[id]){minField.hidden=true;return}
+ minField.hidden=false;
+ const rule=newPrizeRules[id],row=monthTargetRows(month,id,period,branch).find(t=>period==='month'||+t.stage===stage);
+ const prizes=prizeValues(row,period==='month'?rule.month:rule.half[Math.max(0,Math.min(2,stage-1))]);
+ $('#targetAmount').value=period==='month'?'':row?.target_amount??'';
+ [1,2,3].forEach((n,i)=>$('#targetPrize'+n).value=prizes[i]??0);
+ if($('#targetPrize4'))$('#targetPrize4').value=prizes[3]??0;
+ $('#targetPersonalMin').value=configuredMinimum(row,period==='month'?rule.monthMin:rule.halfMin);
+ const amountLabel=$('#targetAmount').previousElementSibling;
+ amountLabel.textContent=period==='month'?'Target（整月奖金只判断上下半月达标，可留空）':'Target';
+}
+const renderTargetsBeforeOctober=renderTargetManager;
+renderTargetManager=function(){renderTargetsBeforeOctober();const month=$('#targetMonth').value,id=$('#targetCompetition').value,period=$('#targetPeriod').value,branch=$('#targetBranch').value;
+ if(newPrizeApplies(month,id)&&newPrizeRules[id]){
+  const rows=monthTargetRows(month,id,period,branch),rule=newPrizeRules[id];
+  $('#targetList').innerHTML=rows.map(row=>{
+   const source=row._defaultTarget?'10月新制度预设（未保存）':String(row.target_month||row.active_from||'').slice(0,7)===month?'本月已保存':'沿用 '+String(row.target_month||row.active_from||'').slice(0,7);
+   const fallback=period==='month'?rule.month:rule.half[Math.max(0,Math.min(2,(+row.stage||1)-1))];
+   const prizes=prizeValues(row,fallback).map(x=>'RM'+neat(x)).join(' / ');
+   const minimum=configuredMinimum(row,period==='month'?rule.monthMin:rule.halfMin);
+   return `<tr><td>${esc(month)}<div style="font-size:11px;opacity:.75">${esc(source)}</div></td><td>${esc(branch)}</td><td>${esc(competitionName(id))}</td><td>${period==='month'?'整月总结':period==='first'?'1－15号':'16号－月底'}</td><td>${period==='month'?'—':'阶段'+row.stage}</td><td>${period==='month'?'上下半月各达第一档':scoreLabel(+row.target_amount,id)}</td><td>${esc(prizes)}<div style="font-size:11px">个人最低 RM${neat(minimum)}</div></td><td>${row._defaultTarget?'<span>预设 · 保存后生效</span>':`<button class="btn" data-edit-target="${esc(String(row.id))}">修改</button>`}</td></tr>`;
+  }).join('');
+  document.querySelectorAll('[data-edit-target]').forEach(b=>b.onclick=()=>editTarget(b.dataset.editTarget));
+ }
+ populateOctoberTargetInputs();
+};
+const previousTargetSave=saveTargetManager;
+saveTargetManager=async function(){
+ const month=$('#targetMonth').value,id=$('#targetCompetition').value,branch=$('#targetBranch').value,period=$('#targetPeriod').value,stage=period==='month'?null:+$('#targetStage').value;
+ if(!newPrizeApplies(month,id))return previousTargetSave();
+ if(!await requireCompetitionAdmin())return managerNotice('#targetStatus','只有 Admin 可以保存 Target 和奖金。',true);
+ if(!['Sutera','Eco'].includes(branch))return managerNotice('#targetStatus','10月新制度请分别选择 Sutera 或 Eco 保存。',true);
+ const raw=$('#targetAmount').value,amount=period==='month'?(raw?Number(raw):1):Number(raw),minimum=Number($('#targetPersonalMin').value);
+ if(!Number.isFinite(amount)||amount<=0||!Number.isFinite(minimum)||minimum<0)return managerNotice('#targetStatus','请填写有效的 Target 和个人最低销售额。',true);
+ const prizes=[1,2,3].map(n=>Math.max(0,Number($('#targetPrize'+n).value)||0));
+ if(period==='month'&&id==='package')prizes.push(Math.max(0,Number($('#targetPrize4').value)||0));
+ while(prizes.length<minRuleMarkerIndex)prizes.push(0);
+ // Negative metadata occupies a reserved fifth slot; zero minimum is represented by -0.000001.
+ prizes.push(minimum===0?-0.000001:-minimum);
+ const existing=targets.find(t=>targetCompetitionId(t)===id&&String(t.target_month||t.active_from||'').slice(0,7)===month&&targetBranch(t)===branch&&targetCompetitionPeriod(t)===period&&(period==='month'||+t.stage===stage));
+ const payload={competition_id:id,target_month:monthStartValue(month),period_type:period==='month'?'month':'half',competition_period:period,branch,stage,target_amount:amount,prizes,active_from:monthStartValue(month)};
+ const result=existing?await db.from('targets').update(payload).eq('id',existing.id):await db.from('targets').insert({...payload,sale_type:id,lucky_draw_ranks:[],qualification:'none'});
+ if(result.error)return managerNotice('#targetStatus','保存失败：'+result.error.message,true);
+ managerNotice('#targetStatus',`${month} ${branch} 的 Target、奖金和个人最低销售额已保存。`);await loadBase();renderTargetManager();
+};
+$('#saveTarget').onclick=saveTargetManager;
+['targetMonth','targetCompetition','targetBranch','targetPeriod','targetStage'].forEach(id=>$('#'+id).addEventListener('change',()=>renderTargetManager()));
+// Refresh visible target information and ranking after all overrides are installed.
+renderTargetManager();render();
+</script>
 </body></html>
