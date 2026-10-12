@@ -517,4 +517,74 @@ if(prize3){
 }
 render();
 </script>
+<script>
+// 2026-10 repair: effective Target visibility, safe defaults, and reliable PDF output.
+const savedEffectiveTargetRows=monthTargetRows;
+const octoberTargetDefaults={
+  Sutera:{package:[35000,50000,65000],product:[4000,5800,7800]},
+  Eco:{package:[15000,21000,28000],product:[1700,2500,3400]}
+};
+monthTargetRows=function(month,id,period,branch=$('#rankBranch')?.value||'all'){
+  const rows=savedEffectiveTargetRows(month,id,period,branch);
+  if(month<'2026-10'||period==='month'||!octoberTargetDefaults[branch]?.[id])return rows;
+  const defaultAmounts=octoberTargetDefaults[branch][id],rule=newPrizeRules[id];
+  const existingStages=new Set(rows.map(t=>+t.stage));
+  for(let i=0;i<3;i++)if(!existingStages.has(i+1))rows.push({
+    competition_id:id,sale_type:id,branch,period_type:'half',competition_period:period,
+    stage:i+1,target_amount:defaultAmounts[i],prizes:rule.half[i],target_month:'2026-10-01',
+    _defaultTarget:true
+  });
+  return rows.sort((a,b)=>(+a.stage||0)-(+b.stage||0));
+};
+renderTargetManager=function(){
+  if(!$('#targetList'))return;
+  const month=$('#targetMonth').value,id=$('#targetCompetition').value,period=$('#targetPeriod').value,
+        branch=$('#targetBranch').value;
+  $('#targetStageField').hidden=period==='month';
+  const rows=monthTargetRows(month,id,period,branch),labels={first:'1－15号',second:'16号－月底',month:'整月总结'};
+  $('#targetList').innerHTML=rows.length?rows.map(t=>{
+    const origin=t._defaultTarget?'系统预设（未保存）':String(t.target_month||t.active_from||'').slice(0,7)===month?'本月已保存':'沿用 '+String(t.target_month||t.active_from||'').slice(0,7);
+    const prizes=(t.prizes||[]).map(x=>'RM'+neat(x)).join(' / ')||'—';
+    return `<tr><td>${esc(month)}<div style="font-size:11px;opacity:.75">${esc(origin)}</div></td><td>${esc(branch)}</td><td>${esc(competitionName(id))}</td><td>${labels[period]||period}</td><td>${period==='month'?'—':'阶段'+t.stage}</td><td>${scoreLabel(+t.target_amount||0,id)}</td><td>${esc(prizes)}</td><td>${t._defaultTarget?'<span>预设</span>':`<button class="btn" data-edit-target="${esc(String(t.id))}">修改</button>`}</td></tr>`;
+  }).join(''):'<tr><td colspan="8">没有找到已保存的 Target。请检查数据库读取状态或先由 Admin 设置。</td></tr>';
+  document.querySelectorAll('[data-edit-target]').forEach(b=>b.onclick=()=>editTarget(b.dataset.editTarget));
+};
+const reportBuilderBeforeRepair=buildReport;
+buildReport=function(){
+  const result=reportBuilderBeforeRepair();
+  const element=$('#pdfReport');
+  element.classList.remove('report-hide');
+  element.hidden=false;
+  element.style.display='block';
+  $('#reportError').textContent='';
+  return result;
+};
+$('#previewPdf').onclick=()=>{
+  try{buildReport();$('#pdfReport').scrollIntoView({behavior:'smooth',block:'start'})}
+  catch(e){$('#reportError').textContent='预览失败：'+(e?.message||String(e))}
+};
+$('#downloadPdf').onclick=async()=>{
+  const btn=$('#downloadPdf');
+  try{
+    buildReport();
+    if(typeof html2pdf!=='function')throw new Error('PDF 工具未加载，请检查网络连接后刷新。');
+    btn.disabled=true;btn.textContent='正在生成 PDF…';
+    const element=$('#pdfReport');
+    await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+    if(!element.offsetWidth||!element.offsetHeight)throw new Error('报告未成功显示，无法生成 PDF。');
+    const person=$('#reportStaff').value.replaceAll('|','-');
+    const filename=`Pretty-Sales-${$('#reportFrom').value||'start'}-${$('#reportTo').value||'end'}-${person}.pdf`;
+    await html2pdf().set({margin:8,filename,image:{type:'jpeg',quality:0.95},
+      html2canvas:{scale:1.5,useCORS:true,backgroundColor:'#ffffff',windowWidth:Math.max(960,element.scrollWidth)},
+      jsPDF:{unit:'mm',format:'a4',orientation:'portrait'},pagebreak:{mode:['css','legacy'],avoid:['tr']}
+    }).from(element).save();
+  }catch(e){$('#reportError').textContent='PDF 生成失败：'+(e?.message||String(e))}
+  finally{btn.disabled=false;btn.textContent='下载 PDF'}
+};
+$('#targetBranch').addEventListener('change',renderTargetManager);
+$('#targetMonth').addEventListener('change',renderTargetManager);
+$('#targetCompetition').addEventListener('change',renderTargetManager);
+$('#targetPeriod').addEventListener('change',renderTargetManager);
+renderTargetManager();render();
+</script>
 </body></html>
